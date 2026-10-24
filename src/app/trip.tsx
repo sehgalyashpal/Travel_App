@@ -1,5 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import * as Location from "expo-location";
 import {
   Alert,
   Pressable,
@@ -39,6 +40,162 @@ export default function TripScreen() {
 
   const [ended, setEnded] = useState(false);
   const [endTime, setEndTime] = useState("");
+    const [gpsDistance, setGpsDistance] = useState(0);
+    const previousGpsPoint =
+  useRef<Location.LocationObjectCoords | null>(null);
+  function calculateGpsDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) ** 2;
+
+  return (
+    earthRadiusKm *
+    2 *
+    Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  );
+}
+  const [locationSubscription, setLocationSubscription] =
+    useState<Location.LocationSubscription | null>(null);
+  const [gpsStatus, setGpsStatus] = useState("Starting GPS...");
+  const [gpsCoordinates, setGpsCoordinates] = useState("");
+const [lastLatitude, setLastLatitude] = useState<number | null>(null);
+const [lastLongitude, setLastLongitude] = useState<number | null>(null);
+    useEffect(() => {
+    let mounted = true;
+
+    async function startGpsTracking() {
+      try {
+        setGpsStatus("Requesting GPS permission...");
+
+        const { status } =
+          await Location.requestForegroundPermissionsAsync();
+
+        if (status !== "granted") {
+          if (mounted) {
+            setGpsStatus("GPS permission denied");
+          }
+          Alert.alert(
+            "GPS permission required",
+            "Please allow location access so the app can record journey distance.",
+          );
+          return;
+        }
+
+        if (mounted) {
+          setGpsStatus("GPS tracking active");
+        }
+
+        const subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 5000,
+            distanceInterval: 10,
+          },
+   (location) => {
+  const { latitude, longitude, accuracy } = location.coords;
+
+  setGpsCoordinates(
+    `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`,
+  );
+
+  setLastLatitude(latitude);
+  setLastLongitude(longitude);
+
+  console.log(
+    "GPS update:",
+    latitude,
+    longitude,
+    "Accuracy:",
+    accuracy,
+  );
+
+  if (accuracy !== null && accuracy > 50) {
+    setGpsStatus(
+      `GPS signal weak: ${Math.round(accuracy)} m accuracy`,
+    );
+    return;
+  }
+
+  setGpsStatus("GPS tracking active");
+
+  const previous = previousGpsPoint.current;
+
+  if (previous) {
+    const segmentKm = calculateGpsDistance(
+      previous.latitude,
+      previous.longitude,
+      latitude,
+      longitude,
+    );
+
+    console.log("GPS segment:", segmentKm, "km");
+
+    if (segmentKm <= 100) {
+      setGpsDistance((current) => {
+        const newDistance = current + segmentKm;
+
+        console.log("TOTAL GPS DISTANCE:", newDistance, "km");
+
+        return newDistance;
+      });
+    } else {
+      console.log(
+        "GPS segment ignored because it is over 10 km:",
+        segmentKm,
+        "km",
+      );
+    }
+  } else {
+    console.log("First GPS point recorded");
+  }
+
+  previousGpsPoint.current = {
+    latitude,
+    longitude,
+    accuracy,
+    altitude: null,
+    altitudeAccuracy: null,
+    heading: null,
+    speed: null,
+  };
+},
+
+
+        );
+
+        if (mounted) {
+          setLocationSubscription(subscription);
+        } else {
+          subscription.remove();
+        }
+      } catch (error) {
+        console.error("GPS start error:", error);
+
+        if (mounted) {
+          setGpsStatus("GPS unavailable");
+        }
+      }
+    }
+
+    void startGpsTracking();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   function endJourneyNow() {
     if (!endRemarks.trim()) {
@@ -58,8 +215,9 @@ export default function TripScreen() {
         startTime: params.startTime || "",
         startRemarks: params.startRemarks || "",
         endTime: finalEndTime,
-        endRemarks: endRemarks.trim(),
-        fare: String(fareAmount),
+endRemarks: endRemarks.trim(),
+gpsDistance: String(gpsDistance),
+fare: String(fareAmount),
         fuelCostPerKm: String(fuelAmount),
         maintenancePerKm: String(maintenanceAmount),
         food: String(foodAmount),
@@ -158,7 +316,21 @@ export default function TripScreen() {
             </>
           ) : null}
         </View>
+{/* GPS DISTANCE TRACKING */}
+<View style={styles.card}>
+  <Text style={styles.cardTitle}>GPS Distance Tracking</Text>
 
+  <Text style={styles.label}>GPS Status</Text>
+  <Text style={styles.value}>{gpsStatus}</Text>
+
+  <Text style={styles.label}>Latest Coordinates</Text>
+  <Text style={styles.value}>
+    {gpsCoordinates || "Waiting for GPS location..."}
+  </Text>
+
+  <Text style={styles.label}>Distance Recorded</Text>
+  <Text style={styles.value}>{gpsDistance.toFixed(3)} km</Text>
+</View>
         {/* FUEL / VEHICLE COST */}
 
         {isFuelVehicle ? (
@@ -577,3 +749,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 });
+
